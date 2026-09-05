@@ -59,7 +59,7 @@ https://<owner>.github.io/cow-farming/
 
 Open that link in Safari on an iPhone, tap **Share**, then **Add to Home Screen**. From the home screen it launches full screen, with its own icon and splash screen, in landscape, and works offline after the first visit.
 
-The first time you publish, GitHub Pages must be allowed to use GitHub Actions as its source: the workflow enables this itself, or you can set it under Settings > Pages > Source > GitHub Actions.
+GitHub Pages must use GitHub Actions as its source (Settings > Pages > Build and deployment > Source > GitHub Actions). The workflow tries to set this itself; if the repository is instead set to deploy from a branch, GitHub publishes the raw repository on every push and the workflow waits for that build so the real game is published last.
 
 ### iPhone features used
 
