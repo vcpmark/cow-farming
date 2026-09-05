@@ -73,10 +73,30 @@ check(joeState.player === 'farmer-joe', 'debug become returns to Farmer Joe');
 const daisy = await page.evaluate(() => window.farm.debugEntityScreen('cow-holstein'));
 if (daisy && daisy.x > 0 && daisy.x < 844 && daisy.y > 0 && daisy.y < 390) {
   await tap(daisy);
-  check((await state()).player === 'cow-holstein', 'tapping a cow in the world becomes that cow');
+  const after = (await state()).player;
+  check(after.startsWith('cow-'), `tapping a cow in the world becomes a cow (got ${after}; overlapping cows may win the tap)`);
 } else {
   console.log('skip: Daisy off screen at', JSON.stringify(daisy ?? cowPos));
 }
+
+// Radio: on by default, plays audibly, toggles off and on from its button.
+check((await state()).radio === true, 'radio is on by default');
+await page.waitForTimeout(1200);
+const radioLevel = await page.evaluate(() => window.farm.debugProbe());
+check(radioLevel.rms > 0.01 && radioLevel.peak < 1.0, `radio is audible without clipping (rms ${radioLevel.rms.toFixed(3)}, peak ${radioLevel.peak.toFixed(2)})`);
+await tap((await layout()).radio);
+check((await state()).radio === false, 'radio button turns the radio off');
+await page.waitForTimeout(1600);
+const quiet = await page.evaluate(() => window.farm.debugProbe());
+check(quiet.rms < 0.02, `radio is silent when off (rms ${quiet.rms.toFixed(3)})`);
+
+// Animal voices produce real output at a healthy level.
+for (const kind of ['moo', 'baa', 'neigh', 'woof', 'oink', 'cluck', 'crow', 'quack', 'horn']) {
+  const lvl = await page.evaluate((k) => window.farm.debugSound(k), kind);
+  check(lvl.peak > 0.08 && lvl.peak <= 1.0, `${kind}: peak ${lvl.peak.toFixed(2)} rms ${lvl.rms.toFixed(3)}`);
+}
+await tap((await layout()).radio);
+check((await state()).radio === true, 'radio button turns the radio back on');
 
 // Action button as a cow moos without errors.
 await tap((await layout()).action);

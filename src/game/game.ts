@@ -3,12 +3,13 @@
  * breeds of animals. Tap any animal, farmer or tractor to become it, then
  * drag to walk and press the big button to make its sound.
  */
-import { buildCharacters, type CharacterDef } from './characters';
+import { buildCharacters, type CharacterDef, type SoundKind } from './characters';
 import { Entity } from './entity';
 import { Effects } from './effects';
 import { Input, type Pointer } from './input';
 import { portraitOf } from './portraits';
 import { Sfx, speak } from './audio/sfx';
+import { AREAS as FARM_AREAS } from './world';
 import { drawFarmer } from './art/peopleArt';
 import { CowShow, JUDGE, RIBBON_COLORS, drawStallBanners, drawStartPrompt, type Ribbon } from './show';
 import { Platform, isIOS, isStandalone } from '../platform';
@@ -89,6 +90,9 @@ export class Game {
   private toast = '';
   private toastLife = 0;
   private capturing = false;
+  private currentArea = '';
+  private areaTimer = 0;
+  private lastAreaSpoken = '';
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d')!;
@@ -191,7 +195,8 @@ export class Game {
       show: { x: vw - 146 - R, y: 34 + T },
       photo: { x: 34 + L, y: bottomRow },
       tilt: { x: 90 + L, y: bottomRow },
-      install: this.platform.canPromptInstall ? { x: 146 + L, y: bottomRow } : null,
+      radio: { x: 146 + L, y: bottomRow },
+      install: this.platform.canPromptInstall ? { x: 202 + L, y: bottomRow } : null,
     };
   }
 
@@ -310,14 +315,38 @@ export class Game {
     this.installHintLife = 14;
   }
 
+  /** Plays a sound and samples the output level shortly after, for the smoke test. */
+  debugSound(kind: string): Promise<{ peak: number; rms: number }> {
+    this.sfx.play(kind as SoundKind);
+    return new Promise((res) => {
+      let peak = 0;
+      let rms = 0;
+      let n = 0;
+      const id = window.setInterval(() => {
+        const p = this.sfx.probe();
+        peak = Math.max(peak, p.peak);
+        rms = Math.max(rms, p.rms);
+        if (++n >= 12) {
+          window.clearInterval(id);
+          res({ peak, rms });
+        }
+      }, 50);
+    });
+  }
+
+  debugProbe(): { peak: number; rms: number } {
+    return this.sfx.probe();
+  }
+
   /** Snapshot of interactive state for the smoke test. */
-  debugState(): { albumOpen: boolean; player: string; audio: string; muted: boolean; showPhase: string } {
+  debugState(): { albumOpen: boolean; player: string; audio: string; muted: boolean; showPhase: string; radio: boolean } {
     return {
       albumOpen: this.albumOpen,
       player: this.player.def.id,
       audio: this.sfx.state,
       muted: this.sfx.muted,
       showPhase: this.show.phase,
+      radio: this.sfx.radio.wanted,
     };
   }
 
@@ -326,7 +355,7 @@ export class Game {
     const lay = this.layout();
     const s = this.scale;
     const px = (p: { x: number; y: number }) => ({ x: p.x * s, y: p.y * s });
-    return { action: px(lay.action), album: px(lay.album), sound: px(lay.sound), show: px(lay.show), photo: px(lay.photo), tilt: px(lay.tilt) };
+    return { action: px(lay.action), album: px(lay.album), sound: px(lay.sound), show: px(lay.show), photo: px(lay.photo), tilt: px(lay.tilt), radio: px(lay.radio) };
   }
 
   /** Screen position (CSS px) of a character, for the smoke test. */
@@ -468,6 +497,7 @@ export class Game {
         }
         break;
       case 'farmer':
+        speak(d.word, this.sfx.muted);
         for (const e of this.entities) {
           if (e === p) continue;
           if (Math.hypot(e.x - p.x, e.y - p.y) < 110) {
@@ -501,6 +531,23 @@ export class Game {
     }
     this.showHint = Math.max(0, this.showHint - dt);
     this.toastLife = Math.max(0, this.toastLife - dt);
+    this.sfx.radio.update();
+    // Announce the area the player has walked into (once it has settled there).
+    {
+      const p = this.player;
+      const area = FARM_AREAS.find((a) => p.x >= a.x0 && p.x <= a.x1);
+      const id = area?.id ?? '';
+      if (id !== this.currentArea) {
+        this.currentArea = id;
+        this.areaTimer = 0;
+      } else if (area && id !== this.lastAreaSpoken) {
+        this.areaTimer += dt;
+        if (this.areaTimer > 1.2 && this.becomes > 0 && !this.show.active && !this.card) {
+          this.lastAreaSpoken = id;
+          speak(`Welcome to the ${area.label}!`, this.sfx.muted, false);
+        }
+      }
+    }
     this.rotateHint = Math.max(0, this.rotateHint - dt);
     if (this.installHintLife > 0) this.installHintLife -= dt;
     // After a little play on iPhone Safari, suggest adding the game to the Home Screen.
@@ -606,6 +653,16 @@ export class Game {
     } else if (Math.hypot(ptr.x - lay.tilt.x, ptr.y - lay.tilt.y) < BTN_R + 6) {
       ptr.claimed = 'tilt';
       void this.toggleTilt();
+    } else if (Math.hypot(ptr.x - lay.radio.x, ptr.y - lay.radio.y) < BTN_R + 6) {
+      ptr.claimed = 'radio';
+      const on = this.sfx.radio.toggle();
+      this.say(on ? 'Farm radio on' : 'Farm radio off');
+    } else if (ptr.x > lay.badge.x && ptr.x < lay.badge.x + 210 && ptr.y > lay.badge.y && ptr.y < lay.badge.y + 54) {
+      // Tapping your own badge repeats the introduction.
+      ptr.claimed = 'badge';
+      const p = this.player;
+      speak(`You are ${p.def.name}, a ${p.def.breed}. ${p.def.fact}`, this.sfx.muted);
+      this.card = { def: p.def, life: 0 };
     } else if (lay.install && Math.hypot(ptr.x - lay.install.x, ptr.y - lay.install.y) < BTN_R + 6) {
       ptr.claimed = 'install';
       void this.platform.promptInstall();
@@ -1010,6 +1067,31 @@ export class Game {
     ctx.fillStyle = '#e0f7fa';
     ctx.fillRect(-5, -9, 10, 16);
     ctx.restore();
+    const rb = lay.radio;
+    const radioOn = this.sfx.radio.wanted;
+    this.drawRoundButton(rb.x, rb.y, BTN_R, radioOn ? '#ffca28' : '#b0bec5');
+    ctx.fillStyle = '#263238';
+    ctx.fill(roundRectPath(rb.x - 11, rb.y - 5, 22, 14, 3));
+    ctx.fillStyle = radioOn ? '#fff59d' : '#eceff1';
+    ctx.beginPath();
+    ctx.arc(rb.x + 4, rb.y + 2, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(rb.x - 8, rb.y - 1, 6, 1.5);
+    ctx.fillRect(rb.x - 8, rb.y + 2, 6, 1.5);
+    ctx.strokeStyle = '#263238';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(rb.x - 6, rb.y - 5);
+    ctx.lineTo(rb.x + 4, rb.y - 13);
+    ctx.stroke();
+    if (radioOn) {
+      // little music notes bobbing above
+      ctx.fillStyle = '#263238';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('♪', rb.x - 12, rb.y - 14 + Math.sin(this.time * 4) * 2);
+      ctx.fillText('♫', rb.x + 13, rb.y - 16 + Math.sin(this.time * 4 + 1.5) * 2);
+    }
     if (lay.install) {
       const ib = lay.install;
       this.drawRoundButton(ib.x, ib.y, BTN_R, '#66bb6a');
