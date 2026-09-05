@@ -1,7 +1,7 @@
 /** Speech bubbles, particles and little props (eggs) that make actions feel alive. */
 import { roundRectPath } from './util';
 
-export type ParticleKind = 'heart' | 'note' | 'dust' | 'grass' | 'splash' | 'smoke' | 'sparkle' | 'zzz' | 'star';
+export type ParticleKind = 'heart' | 'note' | 'dust' | 'grass' | 'splash' | 'smoke' | 'sparkle' | 'zzz' | 'star' | 'confetti' | 'shine';
 
 export interface Particle {
   kind: ParticleKind;
@@ -48,6 +48,15 @@ export class Effects {
       if (kind === 'grass') Object.assign(base, { vy: -30 - Math.random() * 30, vx: (Math.random() - 0.5) * 50, maxLife: 0.6, size: 3 });
       if (kind === 'zzz') Object.assign(base, { vx: 6, vy: -14, maxLife: 2.2, size: 8 });
       if (kind === 'sparkle') Object.assign(base, { vx: (Math.random() - 0.5) * 140, vy: (Math.random() - 0.5) * 140, maxLife: 0.6 + Math.random() * 0.4, size: 4 + Math.random() * 5 });
+      if (kind === 'confetti')
+        Object.assign(base, {
+          vx: (Math.random() - 0.5) * 160,
+          vy: -120 - Math.random() * 120,
+          maxLife: 1.8 + Math.random() * 0.8,
+          size: 3 + Math.random() * 3,
+          color: ['#ef5350', '#42a5f5', '#ffee58', '#66bb6a', '#ab47bc', '#ffa726'][Math.floor(Math.random() * 6)],
+        });
+      if (kind === 'shine') Object.assign(base, { vx: (Math.random() - 0.5) * 20, vy: -20 - Math.random() * 20, maxLife: 0.5, size: 3 + Math.random() * 3, color: '#ffffff' });
       this.particles.push({ ...base, ...opts });
     }
   }
@@ -63,6 +72,10 @@ export class Effects {
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       if (p.kind === 'splash' || p.kind === 'grass') p.vy += 220 * dt;
+      if (p.kind === 'confetti') {
+        p.vy += 160 * dt;
+        p.vx *= 0.98;
+      }
       if (p.kind === 'heart' || p.kind === 'note') p.vy -= 20 * dt;
       if (p.kind === 'sparkle') {
         p.vx *= 0.94;
@@ -127,6 +140,12 @@ export class Effects {
           ctx.arc(0, 0, p.size * 0.6, 0, Math.PI * 2);
           ctx.fill();
           break;
+        case 'confetti':
+          ctx.fillStyle = p.color ?? '#fff';
+          ctx.rotate(p.life * 5 + p.x);
+          ctx.fillRect(-p.size, -p.size * 0.4, p.size * 2, p.size * 0.8);
+          break;
+        case 'shine':
         case 'sparkle':
         case 'star': {
           ctx.fillStyle = p.color ?? '#fff176';

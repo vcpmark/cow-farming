@@ -2,9 +2,9 @@
  * The farm world: layout constants, the areas the animals live in, and the
  * background / ground rendering with a day-night cycle.
  */
-import { blobPath, clamp, lerp, makeRng, mixColor, roundRectPath } from './util';
+import { blobPath, clamp, lerp, makeRng, mixColor, roundRectPath, shade } from './util';
 
-export const WORLD_WIDTH = 4860;
+export const WORLD_WIDTH = 6420;
 export const VIEW_H = 420;
 /** Horizon line where the far hills meet the ground. */
 export const HORIZON = 232;
@@ -29,9 +29,19 @@ export const AREAS: Area[] = [
   { id: 'sheep', x0: 2960, x1: 3480, label: 'Sheep Field' },
   { id: 'horses', x0: 3500, x1: 4130, label: 'Horse Paddock' },
   { id: 'field', x0: 4150, x1: 4800, label: 'Tractor Shed' },
+  { id: 'fair', x0: 4840, x1: 6400, label: 'Cow Show' },
 ];
 
 export const POND = { x: 2090, y: 352, rx: 190, ry: 42 };
+/** The show ring at the fair: a wood-shavings floor fenced with white panels. */
+export const RING = { x0: 5840, x1: 6300, y0: GROUND_TOP + 12, y1: GROUND_BOTTOM - 2 };
+/** The show barn stall row, one stall per cow. */
+export const STALLS = { x0: 4900, stallW: 70 };
+
+export function inRing(x: number, y: number): boolean {
+  return x > RING.x0 && x < RING.x1 && y > RING.y0 - 6 && y < RING.y1 + 4;
+}
+/** Wood shavings ring: a little tan for the sun, darker at night. */
 export const MUD = { x: 2820, y: 360, rx: 90, ry: 26 };
 
 export function depthScale(y: number): number {
@@ -280,6 +290,39 @@ export function drawGround(ctx: CanvasRenderingContext2D, viewW: number, camX: n
     }
   }
 
+  // Fairground: straw bedding under the stall banners and the shavings floor of the ring.
+  if (5900 > camX - 50 && 4800 < camX + viewW + 50) {
+    ctx.fillStyle = mixColor('#e8d48a', '#4d4629', dark * 0.7);
+    ctx.fillRect(STALLS.x0 - 10, GROUND_TOP + 2, 12 * STALLS.stallW + 20, 62);
+    ctx.strokeStyle = mixColor('#c9b15a', '#3a3320', dark * 0.7);
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 90; i++) {
+      const x = STALLS.x0 - 6 + ((i * 37) % (12 * STALLS.stallW + 12));
+      const y = GROUND_TOP + 6 + ((i * 53) % 54);
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + 8, y + 2);
+      ctx.stroke();
+    }
+    // rubber mat walkway in front of the stalls
+    ctx.fillStyle = mixColor('#5f6368', '#1e2022', dark * 0.7);
+    ctx.fillRect(STALLS.x0 - 10, GROUND_TOP + 64, 12 * STALLS.stallW + 20, 10);
+  }
+  if (RING.x1 > camX - 50 && RING.x0 < camX + viewW + 50) {
+    const floor = roundRectPath(RING.x0, RING.y0, RING.x1 - RING.x0, RING.y1 - RING.y0, 30);
+    ctx.fillStyle = mixColor('#d9c27a', '#4a4128', dark * 0.7);
+    ctx.fill(floor);
+    ctx.save();
+    ctx.clip(floor);
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    for (let i = 0; i < 160; i++) {
+      const x = RING.x0 + ((i * 97) % (RING.x1 - RING.x0));
+      const y = RING.y0 + ((i * 61) % (RING.y1 - RING.y0));
+      ctx.fillRect(x, y, 3, 1.5);
+    }
+    ctx.restore();
+  }
+
   // Plough furrows in front of the shed.
   {
     ctx.strokeStyle = mixColor('#a3865a', '#3e3220', dark * 0.7);
@@ -337,6 +380,8 @@ export function drawGround(ctx: CanvasRenderingContext2D, viewW: number, camX: n
     if (t.x < camX - 20 || t.x > camX + viewW + 20) continue;
     if (inPond(t.x, t.y) || inMud(t.x, t.y)) continue;
     if (t.y > 362 && t.y < 392) continue; // path
+    if (inRing(t.x, t.y)) continue; // wood shavings
+    if (t.x > STALLS.x0 - 12 && t.x < STALLS.x0 + 12 * STALLS.stallW + 12 && t.y < GROUND_TOP + 76) continue; // stall bedding
     if (t.k === 3) {
       // flower
       ctx.fillStyle = ['#ffeb3b', '#ff8a80', '#f8bbd0', '#fff'][Math.floor(t.x) % 4];
@@ -750,6 +795,194 @@ function drawScarecrow(ctx: CanvasRenderingContext2D, dark: number, time: number
   ctx.fill();
 }
 
+/** Pleated prize rosette with two tails. */
+export function drawRosette(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, color: string): void {
+  ctx.save();
+  ctx.translate(x, y);
+  // tails
+  ctx.fillStyle = color;
+  for (const dx of [-r * 0.45, r * 0.45]) {
+    ctx.beginPath();
+    ctx.moveTo(dx - r * 0.3, r * 0.4);
+    ctx.lineTo(dx + r * 0.3, r * 0.4);
+    ctx.lineTo(dx + r * 0.25, r * 1.9);
+    ctx.lineTo(dx, r * 1.6);
+    ctx.lineTo(dx - r * 0.25, r * 1.9);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // pleats
+  ctx.beginPath();
+  for (let i = 0; i < 20; i++) {
+    const a = (i / 20) * Math.PI * 2;
+    const rr = i % 2 === 0 ? r : r * 0.82;
+    ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = shade(color, -0.25);
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.42, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawShowBarn(ctx: CanvasRenderingContext2D, dark: number): void {
+  // A long open-sided pole barn: roof, posts and the red valance the banners hang from.
+  const w = 12 * STALLS.stallW + 40;
+  const roof = mixColor('#d6d2c8', '#3f3d38', dark * 0.7);
+  ctx.fillStyle = roof;
+  ctx.beginPath();
+  ctx.moveTo(-20, -150);
+  ctx.lineTo(w - 20, -150);
+  ctx.lineTo(w - 20, -166);
+  ctx.lineTo(-20, -166);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = mixColor('#e9e6df', '#4a4843', dark * 0.7);
+  ctx.fillRect(-20, -150, w, 40);
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(-20, -150, w, 40);
+  // steel posts
+  ctx.fillStyle = mixColor('#9aa0a6', '#2c2f33', dark * 0.7);
+  for (let x = -12; x < w - 20; x += STALLS.stallW * 2) ctx.fillRect(x, -110, 6, 110);
+  // red valance
+  ctx.fillStyle = mixColor('#c62828', '#3d0d0d', dark * 0.7);
+  ctx.fillRect(-20, -112, w, 34);
+  ctx.strokeStyle = mixColor('#ffd54f', '#5a4a10', dark * 0.7);
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-20, -80);
+  ctx.lineTo(w - 20, -80);
+  ctx.stroke();
+  // fans hanging from the roof, like a real show barn
+  for (let x = 40; x < w - 40; x += 210) {
+    ctx.fillStyle = mixColor('#37474f', '#111', dark * 0.5);
+    ctx.beginPath();
+    ctx.arc(x, -128, 12, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(x, -128);
+      ctx.lineTo(x + Math.cos(a) * 10, -128 + Math.sin(a) * 10);
+      ctx.stroke();
+    }
+  }
+}
+
+function drawRingBackdrop(ctx: CanvasRenderingContext2D, dark: number): void {
+  // Judge's table under a big fair banner with hanging flower baskets.
+  const w = RING.x1 - RING.x0;
+  ctx.fillStyle = mixColor('#283593', '#0f1440', dark * 0.7);
+  ctx.fillRect(40, -150, w - 80, 70);
+  ctx.strokeStyle = mixColor('#ffd54f', '#5a4a10', dark * 0.7);
+  ctx.lineWidth = 3;
+  ctx.strokeRect(40, -150, w - 80, 70);
+  ctx.fillStyle = '#ffd54f';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('THE FARM FAIR', w / 2, -122);
+  ctx.font = 'bold 12px sans-serif';
+  ctx.fillStyle = '#fff';
+  ctx.fillText('COW SHOW', w / 2, -96);
+  // poles
+  ctx.fillStyle = mixColor('#9aa0a6', '#2c2f33', dark * 0.7);
+  ctx.fillRect(40, -150, 5, 150);
+  ctx.fillRect(w - 45, -150, 5, 150);
+  // table with skirt
+  ctx.fillStyle = mixColor('#f5f5f5', '#4a4a4a', dark * 0.7);
+  ctx.fillRect(w / 2 - 90, -56, 180, 52);
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(w / 2 - 90, -56, 180, 52);
+  ctx.fillStyle = mixColor('#e0e0e0', '#3a3a3a', dark * 0.7);
+  ctx.fillRect(w / 2 - 94, -60, 188, 6);
+  // flower baskets
+  for (const bx of [w / 2 - 120, w / 2 + 120]) {
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(bx, -150);
+    ctx.lineTo(bx, -100);
+    ctx.stroke();
+    ctx.fillStyle = mixColor('#4c9a3c', '#16301a', dark * 0.7);
+    ctx.fill(blobPath(bx, -86, 22, 14, makeRng(Math.round(bx)), 0.3, 10));
+    const rng = makeRng(Math.round(bx) + 3);
+    for (let i = 0; i < 10; i++) {
+      ctx.fillStyle = ['#ef5350', '#f48fb1', '#ffee58', '#ffa726'][i % 4];
+      ctx.beginPath();
+      ctx.arc(bx - 18 + rng() * 36, -92 + rng() * 16, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  // water bottles on the table
+  ctx.fillStyle = 'rgba(120,190,240,0.8)';
+  for (const bx of [w / 2 - 60, w / 2 + 50]) ctx.fillRect(bx, -70, 5, 14);
+}
+
+function drawRingRail(ctx: CanvasRenderingContext2D, dark: number, width: number, front: boolean): void {
+  // White pipe panels around the ring.
+  const pipe = mixColor('#f5f5f5', '#4a4a4a', dark * 0.7);
+  ctx.strokeStyle = pipe;
+  ctx.lineCap = 'round';
+  ctx.lineWidth = 3.5;
+  for (const y of front ? [-14, -26] : [-16, -30]) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+  for (let x = 0; x <= width; x += 46) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, front ? -30 : -34);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+  ctx.lineWidth = 1;
+  for (const y of front ? [-12.5, -24.5] : [-14.5, -28.5]) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+}
+
+function drawBleachers(ctx: CanvasRenderingContext2D, dark: number): void {
+  const wood = mixColor('#a1887f', '#33291f', dark * 0.7);
+  for (let i = 0; i < 4; i++) {
+    ctx.fillStyle = i % 2 ? wood : shade(wood, -0.1);
+    ctx.fillRect(-70, -20 - i * 16, 140, 10);
+    ctx.fillStyle = mixColor('#78909c', '#222', dark * 0.7);
+    ctx.fillRect(-70, -10 - i * 16, 140, 6);
+  }
+  // a few spectators
+  const rng = makeRng(8);
+  for (let i = 0; i < 9; i++) {
+    const x = -60 + rng() * 120;
+    const row = Math.floor(rng() * 4);
+    const y = -26 - row * 16;
+    ctx.fillStyle = ['#e53935', '#1e88e5', '#43a047', '#fdd835', '#8e24aa'][i % 5];
+    ctx.fillRect(x - 5, y - 10, 10, 12);
+    ctx.fillStyle = ['#f1c9a5', '#8d5a3a', '#e8b48d'][i % 3];
+    ctx.beginPath();
+    ctx.arc(x, y - 15, 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 export function buildProps(): Prop[] {
   const back = GROUND_TOP + 6;
   const props: Prop[] = [
@@ -774,6 +1007,13 @@ export function buildProps(): Prop[] {
     { x: 4520, y: back + 4, w: 30, draw: (c, d, t) => drawScarecrow(c, d, t) },
     { x: 4700, y: back + 2, w: 60, draw: (c, d, t) => drawTree(c, d, 'apple', 5, t) },
     { x: 4800, y: back + 8, w: 60, draw: (c, d, t) => drawTree(c, d, 'apple', 6, t) },
+    // The fair: show barn with stall banners, then the show ring.
+    { x: STALLS.x0 - 20, y: back - 2, w: 460, draw: (c, d) => drawShowBarn(c, d) },
+    { x: 5780, y: back + 30, w: 80, draw: (c, d) => drawBleachers(c, d) },
+    { x: RING.x0, y: back - 1, w: 240, draw: (c, d) => drawRingBackdrop(c, d) },
+    { x: RING.x0, y: RING.y0 + 2, w: 240, draw: (c, d) => drawRingRail(c, d, RING.x1 - RING.x0, false) },
+    { x: RING.x0, y: RING.y1 + 16, w: 240, draw: (c, d) => drawRingRail(c, d, RING.x1 - RING.x0, true) },
+    { x: 6360, y: back + 2, w: 60, draw: (c, d, t) => drawTree(c, d, 'oak', 9, t) },
   ];
   return props;
 }

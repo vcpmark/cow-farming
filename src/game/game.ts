@@ -9,14 +9,19 @@ import { Effects } from './effects';
 import { Input } from './input';
 import { portraitOf } from './portraits';
 import { Sfx, speak } from './audio/sfx';
+import { drawFarmer } from './art/peopleArt';
+import { CowShow, JUDGE, RIBBON_COLORS, drawStallBanners, drawStartPrompt, type Ribbon } from './show';
 import { clamp, lerp, mixColor, roundRectPath } from './util';
 import {
   AREAS,
   GROUND_BOTTOM,
   GROUND_TOP,
   HORIZON,
+  RING,
   VIEW_H,
   WORLD_WIDTH,
+  drawRosette,
+  inRing,
   buildProps,
   daylight,
   drawGround,
@@ -71,11 +76,22 @@ export class Game {
   private hintLife = 12;
   private becomes = 0;
   private running = false;
+  private show: CowShow;
+  private ribbons = new Map<string, Ribbon[]>();
+  private startPrompt: { x: number; y: number; w: number; h: number } | null = null;
+  private showHint = 0;
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d')!;
     this.input = new Input(canvas, (px, py) => this.toLogical(px, py));
     this.input.onFirstInteraction = () => this.sfx.unlock();
+    this.show = new CowShow({
+      effects: this.effects,
+      sfx: this.sfx,
+      speak: (t) => speak(t, this.sfx.muted),
+      award: (id, rb) => this.awardRibbon(id, rb),
+    });
+    this.loadRibbons();
     window.addEventListener('resize', () => this.resize());
     this.resize();
     this.populate();
@@ -130,7 +146,80 @@ export class Game {
     requestAnimationFrame(loop);
   }
 
+  // ---- ribbons ---------------------------------------------------------------
+
+  private loadRibbons(): void {
+    try {
+      const raw = localStorage.getItem('farm-ribbons');
+      if (raw) {
+        const obj = JSON.parse(raw) as Record<string, Ribbon[]>;
+        for (const [k, v] of Object.entries(obj)) if (Array.isArray(v)) this.ribbons.set(k, v);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  private awardRibbon(id: string, rb: Ribbon): void {
+    const list = this.ribbons.get(id) ?? [];
+    list.push(rb);
+    this.ribbons.set(id, list);
+    try {
+      localStorage.setItem('farm-ribbons', JSON.stringify(Object.fromEntries(this.ribbons)));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  private ribbonsOf(id: string): Ribbon[] {
+    return this.ribbons.get(id) ?? [];
+  }
+
+  private get cows(): Entity[] {
+    return this.entities.filter((e) => e.def.species === 'cow');
+  }
+
+  /** Teleport the player to the show ring gate (the rosette HUD button). */
+  private goToShow(): void {
+    const p = this.player;
+    p.target = null;
+    p.x = RING.x0 - 70;
+    p.y = (RING.y0 + RING.y1) / 2 + 10;
+    p.facing = 1;
+    this.camX = clamp(p.x - this.viewW / 2, 0, WORLD_WIDTH - this.viewW);
+    this.effects.spawn('sparkle', p.x, p.y - 40, 16);
+    this.sfx.sparkle();
+    if (p.def.species !== 'cow') {
+      this.showHint = 5;
+      speak('Only cows can enter the show. Tap a cow to become one!', this.sfx.muted);
+    }
+  }
+
+  private toScreen(wx: number, wy: number): { x: number; y: number } {
+    return { x: wx - this.camX, y: wy + this.offY };
+  }
+
   // ---- debug helpers (used by the screenshot script) -----------------------------
+
+  debugStartShow(): void {
+    const cow = this.entities.find((e) => e.def.id === 'cow-holstein')!;
+    this.become(cow);
+    this.card = null;
+    this.goToShow();
+    cow.x = (RING.x0 + RING.x1) / 2;
+    cow.y = (RING.y0 + RING.y1) / 2 + 14;
+    this.camX = clamp(cow.x - this.viewW / 2, 0, WORLD_WIDTH - this.viewW);
+    this.show.start(cow, this.cows);
+  }
+
+  debugShowPhase(phase: 'groom' | 'walk' | 'pose' | 'judging' | 'results'): void {
+    (this.show as unknown as { setPhase: (p: string) => void }).setPhase(phase);
+  }
+
+  debugGoToShow(): void {
+    this.goToShow();
+    this.card = null;
+  }
 
   /** Become the character with this id (e.g. "cow-holstein"). */
   debugBecome(id: string): void {
@@ -177,6 +266,7 @@ export class Game {
   }
 
   private become(e: Entity): void {
+    if (this.show.active) return;
     if (e === this.player) {
       this.doAction();
       return;
@@ -190,6 +280,10 @@ export class Game {
   // ---- actions -----------------------------------------------------------------
 
   private doAction(): void {
+    if (this.show.active) {
+      this.show.press();
+      return;
+    }
     const p = this.player;
     const d = p.def;
     const top = p.y - d.hit.h * p.scale;
@@ -267,6 +361,18 @@ export class Game {
     const dl = daylight(this.time);
     this.handleInput(dt);
 
+    this.show.update(dt, this.input.pointers.values(), (wx, wy) => this.toScreen(wx, wy));
+    if (this.show.active) {
+      const p = this.player;
+      if (!this.show.playerMayMove && !p.target) {
+        p.vx = 0;
+        p.vy = 0;
+      }
+      p.x = clamp(p.x, RING.x0 + 20, RING.x1 - 20);
+      p.y = clamp(p.y, RING.y0 + 4, RING.y1);
+    }
+    this.showHint = Math.max(0, this.showHint - dt);
+
     const spawnZ = (x: number, y: number) => this.effects.spawn('zzz', x, y, 1);
     for (const e of this.entities) {
       e.update(dt, this.time, dl.isNight, spawnZ);
@@ -329,6 +435,7 @@ export class Game {
     const actionC = { x: vw - 54, y: vh - 54 };
     const albumC = { x: vw - 34, y: 34 };
     const soundC = { x: vw - 90, y: 34 };
+    const showC = { x: vw - 146, y: 34 };
 
     // Claim pointers landing on HUD controls so they don't move the player.
     for (const ptr of this.input.pointers.values()) {
@@ -345,6 +452,17 @@ export class Game {
       if (Math.hypot(ptr.x - actionC.x, ptr.y - actionC.y) < ACTION_R + 6) {
         ptr.claimed = 'action';
         this.doAction();
+      } else if (this.show.active) {
+        // During the show, touches belong to the mini-game (except while leading the cow).
+        ptr.claimed = this.show.playerMayMove ? '' : 'show';
+        this.show.press();
+      } else if (this.startPrompt && ptr.x > this.startPrompt.x && ptr.x < this.startPrompt.x + this.startPrompt.w && ptr.y > this.startPrompt.y - 6 && ptr.y < this.startPrompt.y + this.startPrompt.h + 6) {
+        ptr.claimed = 'show';
+        this.show.start(this.player, this.cows);
+        this.hintLife = 0;
+      } else if (Math.hypot(ptr.x - showC.x, ptr.y - showC.y) < BTN_R + 6) {
+        ptr.claimed = 'show';
+        this.goToShow();
       } else if (Math.hypot(ptr.x - albumC.x, ptr.y - albumC.y) < BTN_R + 6) {
         ptr.claimed = 'album';
         this.albumOpen = true;
@@ -397,7 +515,7 @@ export class Game {
       for (const e of this.entities) {
         if (e.hitTest(wx, wy) && (!hit || e.y > hit.y)) hit = e;
       }
-      if (hit) {
+      if (hit && !this.show.active) {
         this.become(hit);
       } else if (wy > HORIZON - 30) {
         p.target = { x: clamp(wx, 20, WORLD_WIDTH - 20), y: clamp(wy, GROUND_TOP + 4, GROUND_BOTTOM) };
@@ -515,7 +633,39 @@ export class Game {
     for (const e of this.entities) {
       const half = e.def.hit.w * e.scale + 80;
       if (e.x + half < this.camX || e.x - half > this.camX + this.viewW) continue;
-      items.push({ y: e.y, draw: () => e.draw(ctx, this.time, this.camX) });
+      items.push({
+        y: e.y,
+        draw: () => {
+          e.draw(ctx, this.time, this.camX);
+          // Prize cows wear their latest rosette on the halter side.
+          const won = e.def.species === 'cow' ? this.ribbonsOf(e.def.id) : [];
+          if (won.length) drawRosette(ctx, e.x - this.camX + e.facing * 34 * e.scale, e.y - 52 * e.scale, 5 * e.scale, RIBBON_COLORS[won[won.length - 1]]);
+        },
+      });
+    }
+    // Show barn banners and the judge at the fair.
+    if (this.camX + this.viewW > 4800) {
+      items.push({
+        y: GROUND_TOP + 5,
+        draw: () => {
+          ctx.save();
+          ctx.translate(-this.camX, GROUND_TOP + 5);
+          drawStallBanners(ctx, this.cows, (id) => this.ribbonsOf(id), dark);
+          ctx.restore();
+        },
+      });
+      const j = this.show.judge;
+      items.push({
+        y: j.y,
+        draw: () => {
+          ctx.save();
+          ctx.translate(j.x - this.camX, j.y);
+          const s = 0.9;
+          ctx.scale(s * j.facing, s);
+          drawFarmer(ctx, JUDGE, 7, { walk: j.walk, moving: j.moving, headDown: 0, chew: 0, tail: 0, ear: 0, blink: 0, t: this.time, action: 0 });
+          ctx.restore();
+        },
+      });
     }
     items.sort((a, b) => a.y - b.y);
     for (const it of items) it.draw();
@@ -534,6 +684,7 @@ export class Game {
 
     ctx.save();
     ctx.translate(-this.camX, 0);
+    this.show.drawWorld(ctx, this.time);
     this.effects.drawParticles(ctx);
     this.effects.drawBubbles(ctx);
     ctx.restore();
@@ -546,6 +697,24 @@ export class Game {
     ctx.restore();
 
     this.drawHud(dl.isNight);
+    // Cow show prompt and overlays.
+    const p = this.player;
+    this.startPrompt = null;
+    if (!this.show.active && !this.albumOpen && p.def.species === 'cow' && inRing(p.x, p.y) && this.show.cooldown <= 0) {
+      this.startPrompt = drawStartPrompt(ctx, this.viewW, this.viewH, this.time);
+    }
+    if (this.showHint > 0 && !this.show.active) {
+      ctx.font = 'bold 15px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const text = 'Only cows can enter the show. Tap a cow to become one!';
+      const w = ctx.measureText(text).width + 30;
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.fill(roundRectPath(this.viewW / 2 - w / 2, this.viewH - 86, w, 32, 16));
+      ctx.fillStyle = '#4a148c';
+      ctx.fillText(text, this.viewW / 2, this.viewH - 70);
+    }
+    this.show.drawOverlay(ctx, this.viewW, this.viewH, (e) => portraitOf(e.def));
     if (this.albumOpen) this.drawAlbum();
   }
 
@@ -607,6 +776,13 @@ export class Game {
       ctx.fillText(`x ${this.eggCount}`, 38, 84);
     }
 
+    // Cow show shortcut (rosette), album and sound buttons (top-right).
+    this.drawRoundButton(vw - 146, 34, BTN_R, '#7e57c2');
+    drawRosette(ctx, vw - 146, 31, 11, '#ffd54f');
+    const myRibbons = this.ribbonsOf(p.def.id);
+    if (myRibbons.length) {
+      myRibbons.slice(-4).forEach((rb, i) => drawRosette(ctx, 76 + i * 14, 58, 5, RIBBON_COLORS[rb]));
+    }
     // Album + sound buttons (top-right).
     this.drawRoundButton(vw - 34, 34, BTN_R, '#ffb74d');
     ctx.fillStyle = '#5d4037';
@@ -657,7 +833,7 @@ export class Game {
     ctx.fillText(word, vw - 54, vh - 54);
 
     // First-time hint.
-    if (this.hintLife > 0 && this.becomes === 0) {
+    if (this.hintLife > 0 && this.becomes === 0 && !this.show.active) {
       const a = clamp(this.hintLife, 0, 1);
       ctx.globalAlpha = a;
       const text = 'Tap any animal to become it!  Drag to walk.';
@@ -783,6 +959,8 @@ export class Game {
       ctx.font = `${size > 90 ? 10 : 8}px sans-serif`;
       ctx.fillStyle = '#607d8b';
       ctx.fillText(e.def.breed, x + 5 + size / 2, y + size + 7, size - 6);
+      const won = this.ribbonsOf(e.def.id).slice(-3);
+      won.forEach((rb, k) => drawRosette(ctx, x + 14 + k * 12, y + 8, 4.5, RIBBON_COLORS[rb]));
     });
     ctx.restore();
   }

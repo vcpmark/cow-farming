@@ -182,6 +182,25 @@ export class Sfx {
     this.tone('sine', [[0, 1760], [1, 1760]], 0.4, 0.12);
   }
 
+  /** Show ring fanfare when the ribbons are handed out. */
+  fanfare(): void {
+    if (!this.ctx || this.muted) return;
+    const notes = [523, 659, 784, 1047];
+    notes.forEach((f, i) => setTimeout(() => this.tone('square', [[0, f], [1, f]], i === 3 ? 0.7 : 0.22, 0.18, { attack: 0.01, filter: 2500 }), i * 180));
+    setTimeout(() => this.noise(1.2, 0.12, 3000), 700); // applause-ish
+  }
+
+  /** A short tick for timing games. */
+  tick(good: boolean): void {
+    if (!this.ctx || this.muted) return;
+    this.tone('sine', [[0, good ? 1200 : 300], [1, good ? 1500 : 200]], 0.12, 0.2);
+  }
+
+  brush(): void {
+    if (!this.ctx || this.muted) return;
+    this.noise(0.12, 0.08, 1800);
+  }
+
   splash(): void {
     if (!this.ctx || this.muted) return;
     this.noise(0.4, 0.3, 900);

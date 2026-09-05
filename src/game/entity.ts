@@ -22,6 +22,8 @@ export class Entity {
   vx = 0;
   vy = 0;
   controlled = false;
+  /** Driven by a mini-game instead of its own wandering. */
+  scripted = false;
   target: Target | null = null;
 
   // animation state
@@ -102,7 +104,7 @@ export class Entity {
   update(dt: number, time: number, night: boolean, spawnZ: (x: number, y: number) => void): void {
     const speed = this.def.speed;
 
-    if (this.controlled) {
+    if (this.controlled || this.scripted) {
       this.ai = 'idle';
       if (this.target) {
         const dx = this.target.x - this.x;

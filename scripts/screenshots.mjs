@@ -19,6 +19,11 @@ const shots = [
   { name: 'game-cow', url: `${base}/`, size: { width: 844, height: 390 }, run: 'farm.debugBecome("cow-holstein")', wait: 1500 },
   { name: 'game-horse-night', url: `${base}/`, size: { width: 844, height: 390 }, run: 'farm.debugBecome("horse-clydesdale"); farm.debugDismissCard(); farm.debugSetTime(190)', wait: 1500 },
   { name: 'game-album', url: `${base}/`, size: { width: 844, height: 390 }, run: 'farm.debugOpenAlbum(true)', wait: 800 },
+  { name: 'game-fair', url: `${base}/`, size: { width: 844, height: 390 }, run: 'farm.debugBecome("cow-jersey"); farm.debugGoToShow(); farm.debugSetTime(40)', wait: 1200 },
+  { name: 'game-show-groom', url: `${base}/`, size: { width: 844, height: 390 }, run: 'farm.debugStartShow(); farm.debugShowPhase("groom")', wait: 1500 },
+  { name: 'game-show-walk', url: `${base}/`, size: { width: 844, height: 390 }, run: 'farm.debugStartShow(); farm.debugShowPhase("walk")', wait: 4000 },
+  { name: 'game-show-pose', url: `${base}/`, size: { width: 844, height: 390 }, run: 'farm.debugStartShow(); farm.debugShowPhase("pose")', wait: 2500 },
+  { name: 'game-show-results', url: `${base}/`, size: { width: 844, height: 390 }, run: 'farm.debugStartShow(); farm.debugShowPhase("judging")', wait: 6500 },
   { name: 'game-portrait', url: `${base}/`, size: { width: 390, height: 844 }, run: 'farm.debugBecome("pig-oldspot")', wait: 1500 },
 ];
 for (const s of shots) {

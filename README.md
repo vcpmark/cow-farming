@@ -36,6 +36,19 @@ All artwork is drawn procedurally on an HTML canvas, so the app has no image ass
 
 Farmers can pick up the eggs the chickens lay.
 
+## The Cow Show mini-game
+
+At the far right of the farm is the fair: a show barn with a red banner over every cow's stall (name, breed, owner and the rosettes she has won) and a show ring with wood shavings, white rails, bleachers and the judge's table under the "Farm Fair" banner.
+
+Become any cow and walk into the ring (the purple rosette button jumps you straight to the ring gate), then tap **Start the Cow Show!**. Three other cows join your class and the show runs like a real one:
+
+1. **Groom.** Swipe over your cow's coat to brush her until the shine meter is full.
+2. **Lead.** Lead her around the ring on the halter, keeping close to the judge's star.
+3. **Set up.** Tap when the swinging needle is in the green to stand her square for the judge.
+4. **Judging.** The judge walks the line, then hands out the ribbons: purple for Grand Champion, then blue, red, yellow and white.
+
+Ribbons are saved on the device. A prize cow wears her latest rosette, and every ribbon hangs on her stall banner in the show barn and shows in the album.
+
 ## Running it in a browser
 
 ```bash
