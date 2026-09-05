@@ -6,7 +6,7 @@
 import { buildCharacters, type CharacterDef } from './characters';
 import { Entity } from './entity';
 import { Effects } from './effects';
-import { Input } from './input';
+import { Input, type Pointer } from './input';
 import { portraitOf } from './portraits';
 import { Sfx, speak } from './audio/sfx';
 import { drawFarmer } from './art/peopleArt';
@@ -97,6 +97,7 @@ export class Game {
       this.sfx.unlock();
       this.platform.onFirstGesture();
     };
+    this.input.onDown = (p) => this.claimPointer(p);
     this.platform.onVisibility((visible) => {
       this.paused = !visible;
       if (visible) this.last = performance.now();
@@ -307,6 +308,40 @@ export class Game {
 
   debugShowInstallHint(): void {
     this.installHintLife = 14;
+  }
+
+  /** Snapshot of interactive state for the smoke test. */
+  debugState(): { albumOpen: boolean; player: string; audio: string; muted: boolean; showPhase: string } {
+    return {
+      albumOpen: this.albumOpen,
+      player: this.player.def.id,
+      audio: this.sfx.state,
+      muted: this.sfx.muted,
+      showPhase: this.show.phase,
+    };
+  }
+
+  /** Screen positions of HUD controls, for the smoke test. */
+  debugLayout(): Record<string, { x: number; y: number }> {
+    const lay = this.layout();
+    const s = this.scale;
+    const px = (p: { x: number; y: number }) => ({ x: p.x * s, y: p.y * s });
+    return { action: px(lay.action), album: px(lay.album), sound: px(lay.sound), show: px(lay.show), photo: px(lay.photo), tilt: px(lay.tilt) };
+  }
+
+  /** Screen position (CSS px) of a character, for the smoke test. */
+  debugEntityScreen(id: string): { x: number; y: number } | null {
+    const e = this.entities.find((x) => x.def.id === id);
+    if (!e) return null;
+    const p = this.toScreen(e.x, e.y - (e.def.hit.h * e.scale) / 2);
+    return { x: p.x * this.scale, y: p.y * this.scale };
+  }
+
+  debugAlbumCard(index: number): { x: number; y: number } {
+    const { cols, cell, top } = this.albumLayout();
+    const col = index % cols;
+    const row = Math.floor(index / cols);
+    return { x: (20 + col * cell + cell / 2) * this.scale, y: (top + row * (cell + 18) + cell / 2 - this.albumScroll) * this.scale };
   }
 
   /** Platform summary for the console: helps when testing on a real iPhone. */
@@ -529,8 +564,12 @@ export class Game {
     this.camX = lerp(this.camX, targetCam, 1 - Math.pow(0.02, dt));
   }
 
-  private handleInput(dt: number): void {
-    void dt;
+  /**
+   * Runs on the pointer-down event itself (not once per frame) so that even a
+   * very quick tap on a HUD button registers. Claims the pointer for the
+   * control it landed on; unclaimed pointers drive the joystick / world taps.
+   */
+  private claimPointer(ptr: Pointer): void {
     const vw = this.viewW;
     const vh = this.viewH;
     const lay = this.layout();
@@ -538,63 +577,62 @@ export class Game {
     const albumC = lay.album;
     const soundC = lay.sound;
     const showC = lay.show;
-
-    // Claim pointers landing on HUD controls so they don't move the player.
-    for (const ptr of this.input.pointers.values()) {
-      if (ptr.claimed !== undefined) continue;
-      if (this.albumOpen) {
-        ptr.claimed = 'album';
-        if (this.albumDragId === null) {
-          this.albumDragId = ptr.id;
-          this.albumDragY = ptr.y;
-          this.albumMoved = false;
-        }
-        continue;
-      }
-      if (Math.hypot(ptr.x - actionC.x, ptr.y - actionC.y) < ACTION_R + 6) {
-        ptr.claimed = 'action';
-        this.doAction();
-      } else if (this.show.active) {
-        // During the show, touches belong to the mini-game (except while leading the cow).
-        ptr.claimed = this.show.playerMayMove ? '' : 'show';
-        this.show.press();
-      } else if (this.startPrompt && ptr.x > this.startPrompt.x && ptr.x < this.startPrompt.x + this.startPrompt.w && ptr.y > this.startPrompt.y - 6 && ptr.y < this.startPrompt.y + this.startPrompt.h + 6) {
-        ptr.claimed = 'show';
-        this.show.start(this.player, this.cows);
-        this.hintLife = 0;
-      } else if (Math.hypot(ptr.x - showC.x, ptr.y - showC.y) < BTN_R + 6) {
-        ptr.claimed = 'show';
-        this.goToShow();
-      } else if (Math.hypot(ptr.x - lay.photo.x, ptr.y - lay.photo.y) < BTN_R + 6) {
-        ptr.claimed = 'photo';
-        void this.takePhoto();
-      } else if (Math.hypot(ptr.x - lay.tilt.x, ptr.y - lay.tilt.y) < BTN_R + 6) {
-        ptr.claimed = 'tilt';
-        void this.toggleTilt();
-      } else if (lay.install && Math.hypot(ptr.x - lay.install.x, ptr.y - lay.install.y) < BTN_R + 6) {
-        ptr.claimed = 'install';
-        void this.platform.promptInstall();
-      } else if (this.installHintLife > 0 && ptr.y > vh - 96 - lay.B && ptr.x > vw / 2 - 190 && ptr.x < vw / 2 + 190) {
-        ptr.claimed = 'install-hint';
-        this.installHintLife = 0;
-        this.platform.dismissIOSInstallHint();
-      } else if (Math.hypot(ptr.x - albumC.x, ptr.y - albumC.y) < BTN_R + 6) {
-        ptr.claimed = 'album';
-        this.albumOpen = true;
-        this.albumScroll = 0;
+    if (this.albumOpen) {
+      ptr.claimed = 'album';
+      if (this.albumDragId === null) {
         this.albumDragId = ptr.id;
         this.albumDragY = ptr.y;
-        this.albumMoved = true; // don't treat the opening press as a pick
-      } else if (Math.hypot(ptr.x - soundC.x, ptr.y - soundC.y) < BTN_R + 6) {
-        ptr.claimed = 'sound';
-        this.sfx.setMuted(!this.sfx.muted);
-      } else if (this.card && ptr.y < (vw < 620 ? 200 : 130) && (vw < 620 || (ptr.x > vw / 2 - 170 && ptr.x < vw / 2 + 170))) {
-        ptr.claimed = 'card';
-        this.card = null;
-      } else {
-        ptr.claimed = '';
+        this.albumMoved = false;
       }
+      return;
     }
+    if (Math.hypot(ptr.x - actionC.x, ptr.y - actionC.y) < ACTION_R + 6) {
+      ptr.claimed = 'action';
+      this.doAction();
+    } else if (this.show.active) {
+      // During the show, touches belong to the mini-game (except while leading the cow).
+      ptr.claimed = this.show.playerMayMove ? '' : 'show';
+      this.show.press();
+    } else if (this.startPrompt && ptr.x > this.startPrompt.x && ptr.x < this.startPrompt.x + this.startPrompt.w && ptr.y > this.startPrompt.y - 6 && ptr.y < this.startPrompt.y + this.startPrompt.h + 6) {
+      ptr.claimed = 'show';
+      this.show.start(this.player, this.cows);
+      this.hintLife = 0;
+    } else if (Math.hypot(ptr.x - showC.x, ptr.y - showC.y) < BTN_R + 6) {
+      ptr.claimed = 'show';
+      this.goToShow();
+    } else if (Math.hypot(ptr.x - lay.photo.x, ptr.y - lay.photo.y) < BTN_R + 6) {
+      ptr.claimed = 'photo';
+      void this.takePhoto();
+    } else if (Math.hypot(ptr.x - lay.tilt.x, ptr.y - lay.tilt.y) < BTN_R + 6) {
+      ptr.claimed = 'tilt';
+      void this.toggleTilt();
+    } else if (lay.install && Math.hypot(ptr.x - lay.install.x, ptr.y - lay.install.y) < BTN_R + 6) {
+      ptr.claimed = 'install';
+      void this.platform.promptInstall();
+    } else if (this.installHintLife > 0 && ptr.y > vh - 96 - lay.B && ptr.x > vw / 2 - 190 && ptr.x < vw / 2 + 190) {
+      ptr.claimed = 'install-hint';
+      this.installHintLife = 0;
+      this.platform.dismissIOSInstallHint();
+    } else if (Math.hypot(ptr.x - albumC.x, ptr.y - albumC.y) < BTN_R + 6) {
+      ptr.claimed = 'album';
+      this.albumOpen = true;
+      this.albumScroll = 0;
+      this.albumDragId = ptr.id;
+      this.albumDragY = ptr.y;
+      this.albumMoved = true; // don't treat the opening press as a pick
+    } else if (Math.hypot(ptr.x - soundC.x, ptr.y - soundC.y) < BTN_R + 6) {
+      ptr.claimed = 'sound';
+      this.sfx.setMuted(!this.sfx.muted);
+    } else if (this.card && ptr.y < (vw < 620 ? 200 : 130) && (vw < 620 || (ptr.x > vw / 2 - 170 && ptr.x < vw / 2 + 170))) {
+      ptr.claimed = 'card';
+      this.card = null;
+    } else {
+      ptr.claimed = '';
+    }
+  }
+
+  private handleInput(dt: number): void {
+    void dt;
 
     if (this.albumOpen) {
       const ptr = this.albumDragId !== null ? this.input.pointers.get(this.albumDragId) : undefined;
@@ -606,7 +644,7 @@ export class Game {
       } else if (this.albumDragId !== null) {
         this.albumDragId = null;
       }
-      for (const tap of this.input.consumeTaps()) this.albumTap(tap.x, tap.y);
+      for (const tap of this.input.consumeTaps()) if (tap.claimed === 'album' || tap.claimed === '') this.albumTap(tap.x, tap.y);
       return;
     }
 
@@ -629,6 +667,7 @@ export class Game {
 
     // Taps: pick an animal or walk somewhere.
     for (const tap of this.input.consumeTaps()) {
+      if (tap.claimed !== '') continue; // HUD buttons act on press, not release
       const wx = tap.x + this.camX;
       const wy = tap.y - this.offY;
       let hit: Entity | null = null;

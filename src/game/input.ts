@@ -18,6 +18,8 @@ export interface Pointer {
 export interface Tap {
   x: number;
   y: number;
+  /** Which HUD control (if any) claimed the pointer when it went down; '' for the world. */
+  claimed: string;
 }
 
 export class Input {
@@ -26,6 +28,8 @@ export class Input {
   /** The pointer currently driving movement, if any. */
   stickId: number | null = null;
   onFirstInteraction: (() => void) | null = null;
+  /** Called synchronously on every pointer down so HUD controls react to the press itself. */
+  onDown: ((p: Pointer) => void) | null = null;
   private interacted = false;
 
   constructor(private canvas: HTMLCanvasElement, private toLogical: (px: number, py: number) => [number, number]) {
@@ -48,7 +52,9 @@ export class Input {
       /* not all browsers */
     }
     const [x, y] = this.toLogical(e.clientX, e.clientY);
-    this.pointers.set(e.pointerId, { id: e.pointerId, x, y, startX: x, startY: y, startTime: performance.now(), moved: false });
+    const p: Pointer = { id: e.pointerId, x, y, startX: x, startY: y, startTime: performance.now(), moved: false };
+    this.pointers.set(e.pointerId, p);
+    this.onDown?.(p);
   };
 
   private move = (e: PointerEvent): void => {
@@ -65,8 +71,8 @@ export class Input {
     e.preventDefault();
     const p = this.pointers.get(e.pointerId);
     if (!p) return;
-    if (!p.moved && performance.now() - p.startTime < 350 && !p.claimed) {
-      this.taps.push({ x: p.startX, y: p.startY });
+    if (!p.moved && performance.now() - p.startTime < 400) {
+      this.taps.push({ x: p.startX, y: p.startY, claimed: p.claimed ?? '' });
     }
     this.pointers.delete(e.pointerId);
     if (this.stickId === e.pointerId) this.stickId = null;
