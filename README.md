@@ -49,6 +49,33 @@ Become any cow and walk into the ring (the purple rosette button jumps you strai
 
 Ribbons are saved on the device. A prize cow wears her latest rosette, and every ribbon hangs on her stall banner in the show barn and shows in the album.
 
+## Play it on the web (GitHub Pages)
+
+The game is a Progressive Web App and deploys itself to GitHub Pages from `.github/workflows/deploy.yml` on every push to `main` (or run the workflow manually from the Actions tab). The site lives at:
+
+```
+https://<owner>.github.io/cow-farming/
+```
+
+Open that link in Safari on an iPhone, tap **Share**, then **Add to Home Screen**. From the home screen it launches full screen, with its own icon and splash screen, in landscape, and works offline after the first visit.
+
+The first time you publish, GitHub Pages must be allowed to use GitHub Actions as its source: the workflow enables this itself, or you can set it under Settings > Pages > Source > GitHub Actions.
+
+### iPhone features used
+
+- Installable PWA with a web app manifest, app icons (including a maskable icon), Apple touch icon and launch screens for common iPhone sizes.
+- Offline play: a service worker (Workbox via `vite-plugin-pwa`) precaches the whole game and updates itself in the background.
+- Full screen standalone mode with `viewport-fit=cover`; the HUD reads the safe-area insets so buttons stay clear of the notch and the home indicator.
+- Screen wake lock keeps the screen on while playing, and the game pauses when you switch apps.
+- Landscape orientation is requested where the browser allows it; portrait still works with a gentle "turn your phone" hint.
+- Photo button: snapshots the farm and opens the iPhone share sheet (Web Share API) so kids can save it to Photos, AirDrop it or send it in Messages.
+- Tilt button: tilt-to-walk using device motion (asks for motion permission on iPhone), calibrated to how the phone is being held.
+- Spoken fun facts with Speech Synthesis and synthesised sounds with Web Audio, unlocked on the first tap as iOS requires.
+- Ribbons, egg counts and settings are saved in local storage and the browser is asked to keep them (`navigator.storage.persist`).
+- An "Add to Home Screen" card appears once on iPhone Safari; on Android and desktop an install button appears when the browser offers a prompt.
+
+iPhone Safari has no vibration or haptics API for web pages, so there is no haptic feedback.
+
 ## Running it in a browser
 
 ```bash
@@ -63,11 +90,13 @@ npm test          # unit tests (vitest)
 npm run typecheck # strict TypeScript
 npm run build     # production build into dist/
 npm run screenshots  # headless Chromium screenshots of the galleries and the game (needs `npm run dev` running)
+npm run icons        # re-render the PWA icons and splash screens from the game art (needs `npm run dev` running)
+npm run build:pages  # production build with the GitHub Pages base path
 ```
 
-## Building the iPhone app
+## Building the native iPhone app (optional)
 
-The game is a Capacitor app. You need a Mac with Xcode and CocoaPods installed.
+The web version above is the main way to play. If you also want an App Store build, the project is Capacitor-ready. You need a Mac with Xcode and CocoaPods installed.
 
 ```bash
 npm install
@@ -89,7 +118,9 @@ The web build also runs in portrait, but landscape gives the farm the most room.
 ## Project layout
 
 ```
-src/main.ts                 bootstrap (game, or ?gallery= design view)
+src/main.ts                 bootstrap (game, ?gallery= design view, ?icon= / ?splash= renderers)
+src/platform.ts             PWA + iPhone features: service worker, install, safe areas, wake lock, share, tilt
+src/splash.ts               app icon and launch screen artwork
 src/game/game.ts            game loop, camera, HUD, album, "become" mechanic, actions
 src/game/entity.ts          character state, wander AI, grazing, sleeping, swimming
 src/game/world.ts           farm layout, sky/day-night, ground, buildings and props
@@ -100,5 +131,7 @@ src/game/audio/sfx.ts       Web Audio synthesised animal sounds and speech
 src/game/effects.ts         speech bubbles and particles
 src/game/input.ts           touch joystick and taps
 scripts/screenshots.mjs     Playwright screenshots for checking the artwork
+scripts/icons.mjs           renders public/icons and public/splash with Playwright
+.github/workflows/deploy.yml  builds and publishes to GitHub Pages
 tests/                      vitest unit tests
 ```

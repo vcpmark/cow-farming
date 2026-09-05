@@ -24,6 +24,7 @@ const shots = [
   { name: 'game-show-walk', url: `${base}/`, size: { width: 844, height: 390 }, run: 'farm.debugStartShow(); farm.debugShowPhase("walk")', wait: 4000 },
   { name: 'game-show-pose', url: `${base}/`, size: { width: 844, height: 390 }, run: 'farm.debugStartShow(); farm.debugShowPhase("pose")', wait: 2500 },
   { name: 'game-show-results', url: `${base}/`, size: { width: 844, height: 390 }, run: 'farm.debugStartShow(); farm.debugShowPhase("judging")', wait: 6500 },
+  { name: 'game-install-hint', url: `${base}/`, size: { width: 844, height: 390 }, run: 'farm.debugShowInstallHint()', wait: 800 },
   { name: 'game-portrait', url: `${base}/`, size: { width: 390, height: 844 }, run: 'farm.debugBecome("pig-oldspot")', wait: 1500 },
 ];
 for (const s of shots) {

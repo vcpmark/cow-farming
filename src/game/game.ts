@@ -11,6 +11,7 @@ import { portraitOf } from './portraits';
 import { Sfx, speak } from './audio/sfx';
 import { drawFarmer } from './art/peopleArt';
 import { CowShow, JUDGE, RIBBON_COLORS, drawStallBanners, drawStartPrompt, type Ribbon } from './show';
+import { Platform, isIOS, isStandalone } from '../platform';
 import { clamp, lerp, mixColor, roundRectPath } from './util';
 import {
   AREAS,
@@ -80,11 +81,27 @@ export class Game {
   private ribbons = new Map<string, Ribbon[]>();
   private startPrompt: { x: number; y: number; w: number; h: number } | null = null;
   private showHint = 0;
+  private platform = new Platform();
+  private paused = false;
+  private installHintLife = 0;
+  private installHintShown = false;
+  private rotateHint = 6;
+  private toast = '';
+  private toastLife = 0;
+  private capturing = false;
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d')!;
     this.input = new Input(canvas, (px, py) => this.toLogical(px, py));
-    this.input.onFirstInteraction = () => this.sfx.unlock();
+    this.input.onFirstInteraction = () => {
+      this.sfx.unlock();
+      this.platform.onFirstGesture();
+    };
+    this.platform.onVisibility((visible) => {
+      this.paused = !visible;
+      if (visible) this.last = performance.now();
+      this.sfx.setEngine(false, 0);
+    });
     this.show = new CowShow({
       effects: this.effects,
       sfx: this.sfx,
@@ -137,13 +154,80 @@ export class Game {
     if (this.running) return;
     this.running = true;
     const loop = (now: number) => {
-      const dt = Math.min(0.05, (now - this.last) / 1000);
-      this.last = now;
-      this.update(dt);
-      this.render();
+      if (!this.paused) {
+        const dt = Math.min(0.05, (now - this.last) / 1000);
+        this.last = now;
+        this.update(dt);
+        this.render();
+      } else {
+        this.last = now;
+      }
       requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
+  }
+
+  // ---- HUD layout (respects the iPhone notch and home indicator) ---------------------
+
+  private layout() {
+    const s = this.scale;
+    const L = this.platform.insets.left / s;
+    const R = this.platform.insets.right / s;
+    const T = this.platform.insets.top / s;
+    const B = this.platform.insets.bottom / s;
+    const vw = this.viewW;
+    const vh = this.viewH;
+    const bottomRow = vh - 34 - B;
+    return {
+      L,
+      R,
+      T,
+      B,
+      badge: { x: 10 + L, y: 10 + T },
+      action: { x: vw - 54 - R, y: vh - 54 - B },
+      album: { x: vw - 34 - R, y: 34 + T },
+      sound: { x: vw - 90 - R, y: 34 + T },
+      show: { x: vw - 146 - R, y: 34 + T },
+      photo: { x: 34 + L, y: bottomRow },
+      tilt: { x: 90 + L, y: bottomRow },
+      install: this.platform.canPromptInstall ? { x: 146 + L, y: bottomRow } : null,
+    };
+  }
+
+  private say(text: string): void {
+    this.toast = text;
+    this.toastLife = 3;
+  }
+
+  /** Snapshot the farm (without the HUD) and hand it to the share sheet. */
+  private async takePhoto(): Promise<void> {
+    this.capturing = true;
+    this.render();
+    const ctx = this.ctx;
+    ctx.setTransform(this.dpr * this.scale, 0, 0, this.dpr * this.scale, 0, 0);
+    ctx.font = 'bold 18px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    const label = `${this.player.def.name} the ${this.player.def.breed}  •  Farm Friends`;
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(0, this.viewH - 34, ctx.measureText(label).width + 28, 34);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(label, 14, this.viewH - 9);
+    this.capturing = false;
+    this.effects.spawn('sparkle', this.player.x, this.player.y - 40, 10, { color: '#ffffff' });
+    this.sfx.ding();
+    const ok = await this.platform.sharePhoto(this.canvas, `${this.player.def.name} on Farm Friends`);
+    this.say(ok ? 'Photo ready!' : 'Could not share the photo');
+  }
+
+  private async toggleTilt(): Promise<void> {
+    if (this.platform.tilt.enabled) {
+      this.platform.disableTilt();
+      this.say('Tilt steering off');
+      return;
+    }
+    const ok = await this.platform.enableTilt();
+    this.say(ok ? 'Tilt your phone to walk!' : 'Tilt steering is not available');
   }
 
   // ---- ribbons ---------------------------------------------------------------
@@ -219,6 +303,15 @@ export class Game {
   debugGoToShow(): void {
     this.goToShow();
     this.card = null;
+  }
+
+  debugShowInstallHint(): void {
+    this.installHintLife = 14;
+  }
+
+  /** Platform summary for the console: helps when testing on a real iPhone. */
+  get platformInfo(): string {
+    return `iOS=${isIOS} standalone=${isStandalone()} share=${this.platform.canShare} tilt=${this.platform.tilt.supported} insets=${JSON.stringify(this.platform.insets)}`;
   }
 
   /** Become the character with this id (e.g. "cow-holstein"). */
@@ -372,6 +465,14 @@ export class Game {
       p.y = clamp(p.y, RING.y0 + 4, RING.y1);
     }
     this.showHint = Math.max(0, this.showHint - dt);
+    this.toastLife = Math.max(0, this.toastLife - dt);
+    this.rotateHint = Math.max(0, this.rotateHint - dt);
+    if (this.installHintLife > 0) this.installHintLife -= dt;
+    // After a little play on iPhone Safari, suggest adding the game to the Home Screen.
+    if (!this.installHintShown && this.time > 30 + 75 && this.platform.shouldShowIOSInstallHint && !this.show.active) {
+      this.installHintShown = true;
+      this.installHintLife = 14;
+    }
 
     const spawnZ = (x: number, y: number) => this.effects.spawn('zzz', x, y, 1);
     for (const e of this.entities) {
@@ -432,10 +533,11 @@ export class Game {
     void dt;
     const vw = this.viewW;
     const vh = this.viewH;
-    const actionC = { x: vw - 54, y: vh - 54 };
-    const albumC = { x: vw - 34, y: 34 };
-    const soundC = { x: vw - 90, y: 34 };
-    const showC = { x: vw - 146, y: 34 };
+    const lay = this.layout();
+    const actionC = lay.action;
+    const albumC = lay.album;
+    const soundC = lay.sound;
+    const showC = lay.show;
 
     // Claim pointers landing on HUD controls so they don't move the player.
     for (const ptr of this.input.pointers.values()) {
@@ -463,6 +565,19 @@ export class Game {
       } else if (Math.hypot(ptr.x - showC.x, ptr.y - showC.y) < BTN_R + 6) {
         ptr.claimed = 'show';
         this.goToShow();
+      } else if (Math.hypot(ptr.x - lay.photo.x, ptr.y - lay.photo.y) < BTN_R + 6) {
+        ptr.claimed = 'photo';
+        void this.takePhoto();
+      } else if (Math.hypot(ptr.x - lay.tilt.x, ptr.y - lay.tilt.y) < BTN_R + 6) {
+        ptr.claimed = 'tilt';
+        void this.toggleTilt();
+      } else if (lay.install && Math.hypot(ptr.x - lay.install.x, ptr.y - lay.install.y) < BTN_R + 6) {
+        ptr.claimed = 'install';
+        void this.platform.promptInstall();
+      } else if (this.installHintLife > 0 && ptr.y > vh - 96 - lay.B && ptr.x > vw / 2 - 190 && ptr.x < vw / 2 + 190) {
+        ptr.claimed = 'install-hint';
+        this.installHintLife = 0;
+        this.platform.dismissIOSInstallHint();
       } else if (Math.hypot(ptr.x - albumC.x, ptr.y - albumC.y) < BTN_R + 6) {
         ptr.claimed = 'album';
         this.albumOpen = true;
@@ -495,13 +610,18 @@ export class Game {
       return;
     }
 
-    // Joystick movement.
+    // Joystick movement, or tilt steering when switched on.
     const stick = this.input.stick();
     const p = this.player;
+    const tilt = this.platform.tilt;
     if (stick && (Math.abs(stick.dx) > 0.05 || Math.abs(stick.dy) > 0.05)) {
       p.target = null;
       p.vx = stick.dx * p.def.speed;
       p.vy = stick.dy * p.def.speed * 0.7;
+    } else if (tilt.enabled && (tilt.x !== 0 || tilt.y !== 0) && (!this.show.active || this.show.playerMayMove)) {
+      p.target = null;
+      p.vx = tilt.x * p.def.speed;
+      p.vy = tilt.y * p.def.speed * 0.7;
     } else if (!p.target) {
       p.vx = 0;
       p.vy = 0;
@@ -543,8 +663,8 @@ export class Game {
       this.albumMoved = false;
       return;
     }
-    const vw = this.viewW;
-    if (Math.hypot(x - (vw - 34), y - 34) < BTN_R + 8) {
+    const lay = this.layout();
+    if (Math.hypot(x - lay.album.x, y - lay.album.y) < BTN_R + 8) {
       this.albumOpen = false;
       return;
     }
@@ -696,6 +816,7 @@ export class Game {
     }
     ctx.restore();
 
+    if (this.capturing) return;
     this.drawHud(dl.isNight);
     // Cow show prompt and overlays.
     const p = this.player;
@@ -723,6 +844,7 @@ export class Game {
     const vw = this.viewW;
     const vh = this.viewH;
     const p = this.player;
+    const lay = this.layout();
 
     // Joystick.
     const stick = this.input.stick();
@@ -738,7 +860,9 @@ export class Game {
     }
 
     // Character badge (top-left).
-    const badge = roundRectPath(10, 10, 210, 54, 27);
+    const bx = lay.badge.x;
+    const by = lay.badge.y;
+    const badge = roundRectPath(bx, by, 210, 54, 27);
     ctx.fillStyle = 'rgba(255,255,255,0.88)';
     ctx.fill(badge);
     ctx.strokeStyle = 'rgba(0,0,0,0.25)';
@@ -746,100 +870,206 @@ export class Game {
     ctx.stroke(badge);
     ctx.save();
     ctx.beginPath();
-    ctx.arc(37, 37, 23, 0, Math.PI * 2);
+    ctx.arc(bx + 27, by + 27, 23, 0, Math.PI * 2);
     ctx.clip();
     ctx.fillStyle = '#c5e1a5';
-    ctx.fillRect(14, 14, 46, 46);
-    ctx.drawImage(portraitOf(p.def), 14, 14, 46, 46);
+    ctx.fillRect(bx + 4, by + 4, 46, 46);
+    ctx.drawImage(portraitOf(p.def), bx + 4, by + 4, 46, 46);
     ctx.restore();
     ctx.fillStyle = '#263238';
     ctx.font = 'bold 15px sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(p.def.name, 68, 29);
+    ctx.fillText(p.def.name, bx + 58, by + 19);
     ctx.font = '12px sans-serif';
     ctx.fillStyle = '#546e7a';
-    ctx.fillText(p.def.breed, 68, 47);
+    ctx.fillText(p.def.breed, bx + 58, by + 37);
 
     // Egg counter.
     if (this.eggCount > 0) {
       ctx.fillStyle = 'rgba(255,255,255,0.85)';
-      ctx.fill(roundRectPath(10, 70, 74, 26, 13));
+      ctx.fill(roundRectPath(bx, by + 60, 74, 26, 13));
       ctx.fillStyle = '#fff3d6';
       ctx.beginPath();
-      ctx.ellipse(24, 83, 6, 8, 0, 0, Math.PI * 2);
+      ctx.ellipse(bx + 14, by + 73, 6, 8, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.strokeStyle = 'rgba(120,90,40,0.5)';
       ctx.stroke();
       ctx.fillStyle = '#263238';
       ctx.font = 'bold 14px sans-serif';
-      ctx.fillText(`x ${this.eggCount}`, 38, 84);
+      ctx.fillText(`x ${this.eggCount}`, bx + 28, by + 74);
     }
 
-    // Cow show shortcut (rosette), album and sound buttons (top-right).
-    this.drawRoundButton(vw - 146, 34, BTN_R, '#7e57c2');
-    drawRosette(ctx, vw - 146, 31, 11, '#ffd54f');
+    // Cow show shortcut (rosette), sound and album buttons (top-right).
+    this.drawRoundButton(lay.show.x, lay.show.y, BTN_R, '#7e57c2');
+    drawRosette(ctx, lay.show.x, lay.show.y - 3, 11, '#ffd54f');
     const myRibbons = this.ribbonsOf(p.def.id);
     if (myRibbons.length) {
-      myRibbons.slice(-4).forEach((rb, i) => drawRosette(ctx, 76 + i * 14, 58, 5, RIBBON_COLORS[rb]));
+      myRibbons.slice(-4).forEach((rb, i) => drawRosette(ctx, bx + 66 + i * 14, by + 48, 5, RIBBON_COLORS[rb]));
     }
-    // Album + sound buttons (top-right).
-    this.drawRoundButton(vw - 34, 34, BTN_R, '#ffb74d');
+    const ab = lay.album;
+    this.drawRoundButton(ab.x, ab.y, BTN_R, '#ffb74d');
     ctx.fillStyle = '#5d4037';
-    ctx.fillRect(vw - 44, 24, 9, 20);
+    ctx.fillRect(ab.x - 10, ab.y - 10, 9, 20);
     ctx.fillStyle = '#8d6e63';
-    ctx.fillRect(vw - 34, 24, 10, 20);
+    ctx.fillRect(ab.x, ab.y - 10, 10, 20);
     ctx.strokeStyle = '#3e2723';
     ctx.lineWidth = 1.5;
-    ctx.strokeRect(vw - 44, 24, 20, 20);
-    this.drawRoundButton(vw - 90, 34, BTN_R, this.sfx.muted ? '#cfd8dc' : '#81d4fa');
+    ctx.strokeRect(ab.x - 10, ab.y - 10, 20, 20);
+    const sb = lay.sound;
+    this.drawRoundButton(sb.x, sb.y, BTN_R, this.sfx.muted ? '#cfd8dc' : '#81d4fa');
     ctx.fillStyle = '#263238';
     ctx.beginPath();
-    ctx.moveTo(vw - 100, 30);
-    ctx.lineTo(vw - 94, 30);
-    ctx.lineTo(vw - 86, 23);
-    ctx.lineTo(vw - 86, 45);
-    ctx.lineTo(vw - 94, 38);
-    ctx.lineTo(vw - 100, 38);
+    ctx.moveTo(sb.x - 10, sb.y - 4);
+    ctx.lineTo(sb.x - 4, sb.y - 4);
+    ctx.lineTo(sb.x + 4, sb.y - 11);
+    ctx.lineTo(sb.x + 4, sb.y + 11);
+    ctx.lineTo(sb.x - 4, sb.y + 4);
+    ctx.lineTo(sb.x - 10, sb.y + 4);
     ctx.closePath();
     ctx.fill();
     ctx.strokeStyle = '#263238';
     ctx.lineWidth = 2;
     if (this.sfx.muted) {
       ctx.beginPath();
-      ctx.moveTo(vw - 82, 28);
-      ctx.lineTo(vw - 74, 40);
-      ctx.moveTo(vw - 74, 28);
-      ctx.lineTo(vw - 82, 40);
+      ctx.moveTo(sb.x + 8, sb.y - 6);
+      ctx.lineTo(sb.x + 16, sb.y + 6);
+      ctx.moveTo(sb.x + 16, sb.y - 6);
+      ctx.lineTo(sb.x + 8, sb.y + 6);
       ctx.stroke();
     } else {
       ctx.beginPath();
-      ctx.arc(vw - 84, 34, 6, -0.9, 0.9);
+      ctx.arc(sb.x + 6, sb.y, 6, -0.9, 0.9);
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(vw - 84, 34, 11, -0.9, 0.9);
+      ctx.arc(sb.x + 6, sb.y, 11, -0.9, 0.9);
+      ctx.stroke();
+    }
+
+    // Photo (share sheet) and tilt steering buttons (bottom-left), install when offered.
+    const ph = lay.photo;
+    this.drawRoundButton(ph.x, ph.y, BTN_R, '#26a69a');
+    ctx.fillStyle = '#fff';
+    ctx.fill(roundRectPath(ph.x - 12, ph.y - 7, 24, 16, 3));
+    ctx.fillRect(ph.x - 5, ph.y - 11, 10, 5);
+    ctx.fillStyle = '#26a69a';
+    ctx.beginPath();
+    ctx.arc(ph.x, ph.y + 1, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(ph.x, ph.y + 1, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    const tb = lay.tilt;
+    const tiltOn = this.platform.tilt.enabled;
+    this.drawRoundButton(tb.x, tb.y, BTN_R, tiltOn ? '#ffca28' : '#b0bec5');
+    ctx.save();
+    ctx.translate(tb.x, tb.y);
+    ctx.rotate(tiltOn ? Math.sin(this.time * 3) * 0.35 : -0.35);
+    ctx.fillStyle = '#263238';
+    ctx.fill(roundRectPath(-7, -12, 14, 24, 3));
+    ctx.fillStyle = '#e0f7fa';
+    ctx.fillRect(-5, -9, 10, 16);
+    ctx.restore();
+    if (lay.install) {
+      const ib = lay.install;
+      this.drawRoundButton(ib.x, ib.y, BTN_R, '#66bb6a');
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(ib.x, ib.y - 11);
+      ctx.lineTo(ib.x, ib.y + 5);
+      ctx.moveTo(ib.x - 7, ib.y - 2);
+      ctx.lineTo(ib.x, ib.y + 5);
+      ctx.lineTo(ib.x + 7, ib.y - 2);
+      ctx.moveTo(ib.x - 10, ib.y + 11);
+      ctx.lineTo(ib.x + 10, ib.y + 11);
       ctx.stroke();
     }
 
     // Action button (bottom-right) with the character's word.
     const pressed = [...this.input.pointers.values()].some((q) => q.claimed === 'action');
     const r = pressed ? ACTION_R - 3 : ACTION_R;
-    this.drawRoundButton(vw - 54, vh - 54, r, '#ff7043');
+    const ac = lay.action;
+    this.drawRoundButton(ac.x, ac.y, r, '#ff7043');
     ctx.fillStyle = '#fff';
     const word = p.def.word.length > 8 ? p.def.word.split(/[- ]/)[0] : p.def.word;
     ctx.font = `bold ${word.length > 5 ? 14 : 18}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(word, vw - 54, vh - 54);
+    ctx.fillText(word, ac.x, ac.y);
+
+    // Toasts, rotate hint and the iPhone "Add to Home Screen" card.
+    if (this.toastLife > 0) {
+      ctx.globalAlpha = Math.min(1, this.toastLife);
+      ctx.font = 'bold 14px sans-serif';
+      ctx.textAlign = 'center';
+      const w = ctx.measureText(this.toast).width + 28;
+      ctx.fillStyle = 'rgba(38,50,56,0.9)';
+      ctx.fill(roundRectPath(vw / 2 - w / 2, 88 + lay.T, w, 30, 15));
+      ctx.fillStyle = '#fff';
+      ctx.fillText(this.toast, vw / 2, 103 + lay.T);
+      ctx.globalAlpha = 1;
+    }
+    if (this.rotateHint > 0 && vw < vh) {
+      ctx.globalAlpha = Math.min(1, this.rotateHint);
+      ctx.font = 'bold 14px sans-serif';
+      ctx.textAlign = 'center';
+      const text = 'Turn your phone sideways for the best view';
+      const w = ctx.measureText(text).width + 28;
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.fill(roundRectPath(vw / 2 - w / 2, 130 + lay.T, w, 30, 15));
+      ctx.fillStyle = '#263238';
+      ctx.fillText(text, vw / 2, 145 + lay.T);
+      ctx.globalAlpha = 1;
+    }
+    if (this.installHintLife > 0) {
+      const a = Math.min(1, this.installHintLife);
+      ctx.globalAlpha = a;
+      const w = Math.min(380, vw - 24);
+      const h = 64;
+      const x = vw / 2 - w / 2;
+      const y = vh - h - 20 - lay.B;
+      const card = roundRectPath(x, y, w, h, 16);
+      ctx.fillStyle = 'rgba(255,255,255,0.96)';
+      ctx.fill(card);
+      ctx.strokeStyle = '#26a69a';
+      ctx.lineWidth = 3;
+      ctx.stroke(card);
+      ctx.drawImage(portraitOf(p.def), x + 8, y + 8, 48, 48);
+      ctx.fillStyle = '#263238';
+      ctx.font = 'bold 14px sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText('Add Farm Friends to your Home Screen', x + 64, y + 20);
+      ctx.font = '12px sans-serif';
+      ctx.fillStyle = '#455a64';
+      ctx.fillText('Tap the Share button, then "Add to Home Screen".', x + 64, y + 40);
+      // share icon
+      ctx.strokeStyle = '#1e88e5';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x + w - 24, y + 22);
+      ctx.lineTo(x + w - 24, y + 42);
+      ctx.moveTo(x + w - 30, y + 28);
+      ctx.lineTo(x + w - 24, y + 22);
+      ctx.lineTo(x + w - 18, y + 28);
+      ctx.stroke();
+      ctx.strokeRect(x + w - 34, y + 32, 20, 18);
+      ctx.fillStyle = '#90a4ae';
+      ctx.font = '11px sans-serif';
+      ctx.fillText('tap to close', x + 64, y + 56);
+      ctx.globalAlpha = 1;
+    }
 
     // First-time hint.
-    if (this.hintLife > 0 && this.becomes === 0 && !this.show.active) {
+    if (this.hintLife > 0 && this.becomes === 0 && !this.show.active && this.installHintLife <= 0) {
       const a = clamp(this.hintLife, 0, 1);
       ctx.globalAlpha = a;
       const text = 'Tap any animal to become it!  Drag to walk.';
       ctx.font = 'bold 15px sans-serif';
       const w = ctx.measureText(text).width + 30;
-      const y = vh - 40 + Math.sin(this.time * 3) * 3;
+      const y = vh - 40 - lay.B + Math.sin(this.time * 3) * 3;
       ctx.fillStyle = 'rgba(255,255,255,0.9)';
       ctx.fill(roundRectPath(vw / 2 - w / 2 - 60, y - 16, w, 32, 16));
       ctx.fillStyle = '#263238';
@@ -920,15 +1150,16 @@ export class Game {
     ctx.font = 'bold 20px sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText('Farm Friends: who do you want to be?', 20, 32);
-    this.drawRoundButton(vw - 34, 34, BTN_R, '#ef5350');
+    const lay = this.layout();
+    ctx.fillText('Farm Friends: who do you want to be?', 20 + lay.L, 32 + lay.T);
+    this.drawRoundButton(lay.album.x, lay.album.y, BTN_R, '#ef5350');
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(vw - 42, 26);
-    ctx.lineTo(vw - 26, 42);
-    ctx.moveTo(vw - 26, 26);
-    ctx.lineTo(vw - 42, 42);
+    ctx.moveTo(lay.album.x - 8, lay.album.y - 8);
+    ctx.lineTo(lay.album.x + 8, lay.album.y + 8);
+    ctx.moveTo(lay.album.x + 8, lay.album.y - 8);
+    ctx.lineTo(lay.album.x - 8, lay.album.y + 8);
     ctx.stroke();
 
     const { cols, cell, top } = this.albumLayout();
