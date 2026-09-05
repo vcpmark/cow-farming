@@ -45,5 +45,31 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # If Pages is still set to "Deploy from a branch", GitHub also runs its own
+      # "pages build and deployment" for every push, which publishes the raw
+      # repository and can overwrite this workflow's build. Try to switch the
+      # source to GitHub Actions; if the token may not, wait for that legacy
+      # build to finish so ours is published last.
+      - name: Make sure the Pages source is GitHub Actions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          current=$(gh api "repos/${{ github.repository }}/pages" --jq .build_type 2>/dev/null)
+          echo "Pages build_type: ${current:-unknown}"
+          if [ "$current" = "legacy" ]; then
+            if gh api -X PUT "repos/${{ github.repository }}/pages" -f build_type=workflow >/dev/null 2>&1; then
+              echo "Switched Pages source to GitHub Actions."
+            else
+              echo "Could not change the Pages source (needs admin). Waiting for the legacy branch build of ${{ github.sha }}..."
+              for i in $(seq 1 24); do
+                busy=$(gh api "repos/${{ github.repository }}/actions/runs?head_sha=${{ github.sha }}&per_page=50" \
+                  --jq '[.workflow_runs[] | select(.name == "pages build and deployment") | select(.status != "completed")] | length' 2>/dev/null)
+                if [ "${busy:-0}" = "0" ] && [ $i -gt 2 ]; then echo "Legacy build finished."; break; fi
+                sleep 10
+              done
+            fi
+          fi
+          exit 0
       - id: deployment
         uses: actions/deploy-pages@v4
