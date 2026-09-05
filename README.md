@@ -31,7 +31,10 @@ All artwork is drawn procedurally on an HTML canvas, so the app has no image ass
 - **Drag anywhere** to walk (a floating joystick appears), or **tap the ground** to walk there.
 - **Big orange button** makes your character's sound and action: cows moo and graze, dogs bark and herd the sheep, chickens lay eggs, pigs splash in the mud, horses rear up, ducks splash, tractors toot and puff smoke, farmers wave and give hearts.
 - **Book button** opens the album of every character so you can pick who to be.
-- **Speaker button** mutes sounds and the spoken facts.
+- **Speaker button** mutes everything: sounds, the radio and the spoken facts.
+- **Radio button** (bottom left) switches the farm radio on and off: a generated country tune with guitar, bass, brushed drums and a fiddle. It turns itself down while the narrator is speaking.
+- **Photo and tilt buttons** (bottom left) share a snapshot and switch on tilt-to-walk.
+- **Tap your badge** (top left) to hear your character's introduction again.
 - A day lasts four minutes. At night the animals go to sleep.
 
 Farmers can pick up the eggs the chickens lay.
@@ -70,7 +73,7 @@ GitHub Pages must use GitHub Actions as its source (Settings > Pages > Build and
 - Landscape orientation is requested where the browser allows it; portrait still works with a gentle "turn your phone" hint.
 - Photo button: snapshots the farm and opens the iPhone share sheet (Web Share API) so kids can save it to Photos, AirDrop it or send it in Messages.
 - Tilt button: tilt-to-walk using device motion (asks for motion permission on iPhone), calibrated to how the phone is being held.
-- Spoken fun facts with Speech Synthesis and synthesised sounds with Web Audio, unlocked on the first tap as iOS requires.
+- Spoken fun facts, farmer greetings and area announcements with Speech Synthesis, picking the most natural English voice the device offers; animal calls are synthesised with a small formant voice model (glottal source, gliding vowel formants, breath noise) so cows, sheep, horses, dogs, pigs, chickens and ducks sound like the real animals, all through a compressor so it is loud and clean on a phone speaker. Everything is unlocked on the first tap as iOS requires.
 - Ribbons, egg counts and settings are saved in local storage and the browser is asked to keep them (`navigator.storage.persist`).
 - An "Add to Home Screen" card appears once on iPhone Safari; on Android and desktop an install button appears when the browser offers a prompt.
 
@@ -127,7 +130,8 @@ src/game/world.ts           farm layout, sky/day-night, ground, buildings and pr
 src/game/characters.ts      the roster of playable characters
 src/game/breeds/            breed data (colours, markings, horns, facts)
 src/game/art/               procedural renderers: cowArt, horseArt, dogArt, smallAnimalArt, birdArt, peopleArt, tractorArt
-src/game/audio/sfx.ts       Web Audio synthesised animal sounds and speech
+src/game/audio/sfx.ts       Web Audio formant-synthesised animal voices, effects and speech
+src/game/audio/radio.ts     the generated country radio station
 src/game/effects.ts         speech bubbles and particles
 src/game/input.ts           touch joystick and taps
 scripts/screenshots.mjs     Playwright screenshots for checking the artwork

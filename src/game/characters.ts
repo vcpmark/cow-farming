@@ -35,7 +35,7 @@ import { hashString } from './util';
 
 export type Species = 'cow' | 'horse' | 'dog' | 'pig' | 'sheep' | 'goat' | 'chicken' | 'duck' | 'farmer' | 'tractor';
 
-export type SoundKind = 'moo' | 'neigh' | 'woof' | 'oink' | 'baa' | 'maa' | 'cluck' | 'quack' | 'hello' | 'horn';
+export type SoundKind = 'moo' | 'neigh' | 'woof' | 'oink' | 'baa' | 'maa' | 'cluck' | 'crow' | 'quack' | 'hello' | 'horn';
 
 export interface CharacterDef {
   id: string;
@@ -218,7 +218,7 @@ export function buildCharacters(): CharacterDef[] {
       breed: b.name,
       fact: b.fact,
       word: b.rooster ? 'Cock-a-doodle-doo!' : 'Bawk!',
-      sound: 'cluck',
+      sound: b.rooster ? 'crow' : 'cluck',
       speed: 100,
       home: [2350, 2660],
       scale: 1.3,
