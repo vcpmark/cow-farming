@@ -5,10 +5,48 @@
  */
 import type { SoundKind } from '../characters';
 
+/** A tiny valid WAV file containing 0.1 s of silence (8 kHz, 8-bit mono). */
+const SILENT_WAV = (() => {
+  const rate = 8000;
+  const samples = 800;
+  const bytes = new Uint8Array(44 + samples);
+  const w = (o: number, str: string) => {
+    for (let i = 0; i < str.length; i++) bytes[o + i] = str.charCodeAt(i);
+  };
+  const u32 = (o: number, v: number) => {
+    bytes[o] = v & 255;
+    bytes[o + 1] = (v >> 8) & 255;
+    bytes[o + 2] = (v >> 16) & 255;
+    bytes[o + 3] = (v >> 24) & 255;
+  };
+  const u16 = (o: number, v: number) => {
+    bytes[o] = v & 255;
+    bytes[o + 1] = (v >> 8) & 255;
+  };
+  w(0, 'RIFF');
+  u32(4, 36 + samples);
+  w(8, 'WAVE');
+  w(12, 'fmt ');
+  u32(16, 16);
+  u16(20, 1); // PCM
+  u16(22, 1); // mono
+  u32(24, rate);
+  u32(28, rate);
+  u16(32, 1);
+  u16(34, 8);
+  w(36, 'data');
+  u32(40, samples);
+  bytes.fill(128, 44); // 8-bit silence is 128
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return `data:audio/wav;base64,${btoa(bin)}`;
+})();
+
 export class Sfx {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private engine: { osc: OscillatorNode; gain: GainNode; lfo: OscillatorNode } | null = null;
+  private silent: HTMLAudioElement | null = null;
   muted = false;
 
   constructor() {
@@ -19,18 +57,69 @@ export class Sfx {
     }
   }
 
-  /** Must be called from a user gesture on iOS. */
+  /** Current audio context state, for diagnostics. */
+  get state(): string {
+    return this.ctx ? this.ctx.state : 'none';
+  }
+
+  /**
+   * Must be called from a user gesture (touch / click). iPhone Safari keeps a
+   * new context suspended until resume() is called inside a gesture, and it
+   * silences Web Audio when the ring/silent switch is on silent unless the
+   * page is also playing a media element, so we loop a silent clip too.
+   */
   unlock(): void {
-    if (this.ctx) {
-      if (this.ctx.state === 'suspended') void this.ctx.resume();
-      return;
-    }
     const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AC) return;
-    this.ctx = new AC();
-    this.master = this.ctx.createGain();
-    this.master.gain.value = this.muted ? 0 : 0.8;
-    this.master.connect(this.ctx.destination);
+    if (!this.ctx) {
+      this.ctx = new AC();
+      this.master = this.ctx.createGain();
+      this.master.gain.value = this.muted ? 0 : 0.8;
+      this.master.connect(this.ctx.destination);
+      // Also unlock on later gestures: a resume may be needed after the app was backgrounded or a call came in.
+      const again = () => this.resume();
+      window.addEventListener('touchend', again, { passive: true });
+      window.addEventListener('click', again, { passive: true });
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') this.resume();
+      });
+    }
+    this.resume();
+    this.startSilentLoop();
+  }
+
+  private resume(): void {
+    if (!this.ctx) return;
+    if (this.ctx.state !== 'running') void this.ctx.resume().catch(() => undefined);
+    // Play a short silent buffer: the classic iOS unlock.
+    try {
+      const buf = this.ctx.createBuffer(1, 1, 22050);
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(this.ctx.destination);
+      src.start(0);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  private startSilentLoop(): void {
+    if (this.silent) {
+      if (this.silent.paused && !this.muted) void this.silent.play().catch(() => undefined);
+      return;
+    }
+    try {
+      // 0.1 s of silence as a WAV data URI; looping it moves iOS to the "playback" audio session.
+      const a = new Audio(SILENT_WAV);
+      a.loop = true;
+      a.volume = 0.01;
+      a.setAttribute('playsinline', '');
+      a.preload = 'auto';
+      this.silent = a;
+      if (!this.muted) void a.play().catch(() => undefined);
+    } catch {
+      this.silent = null;
+    }
   }
 
   setMuted(m: boolean): void {
@@ -42,6 +131,11 @@ export class Sfx {
     }
     if (this.master && this.ctx) this.master.gain.setTargetAtTime(m ? 0 : 0.8, this.ctx.currentTime, 0.05);
     if (m) window.speechSynthesis?.cancel();
+    if (this.silent) {
+      if (m) this.silent.pause();
+      else void this.silent.play().catch(() => undefined);
+    }
+    if (!m) this.resume();
   }
 
   private tone(

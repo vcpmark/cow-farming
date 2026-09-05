@@ -11,6 +11,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "screenshots": "node scripts/screenshots.mjs",
+    "smoke": "node scripts/smoke.mjs",
     "icons": "node scripts/icons.mjs",
     "build:pages": "BASE_PATH=/cow-farming/ npm run build",
     "ios:add": "cap add ios",
